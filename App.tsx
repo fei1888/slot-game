@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import Reel from './components/Reel';
 import Controls from './components/Controls';
-import Oracle from './components/Oracle';
 import { GameState, SymbolId, ReelState, SlotSymbol } from './types';
 import { 
   SYMBOLS, 
@@ -12,8 +11,8 @@ import {
   BET_STEP,
   REEL_DELAY_MS
 } from './constants';
-import { Trophy, CircleDollarSign, Info } from 'lucide-react';
-import { playSpinStart, playWin } from './services/audioService';
+import { Trophy, CircleDollarSign, Info, Share2, Check, Sparkles } from 'lucide-react';
+import { playSpinStart, playWin, playClick, playBonusTrigger } from './services/audioService';
 
 const App: React.FC = () => {
   // Game State
@@ -22,8 +21,14 @@ const App: React.FC = () => {
   const [win, setWin] = useState(0);
   const [isSpinning, setIsSpinning] = useState(false);
   const [showWinModal, setShowWinModal] = useState(false);
-  const [winLines, setWinLines] = useState<number[]>([]); // Indices of winning lines
-  const [winningCells, setWinningCells] = useState<{[key: number]: number[]}>({}); // Col index -> Array of winning Row indices
+  const [winLines, setWinLines] = useState<number[]>([]); 
+  const [winningCells, setWinningCells] = useState<{[key: number]: number[]}>({});
+  const [showShareToast, setShowShareToast] = useState(false);
+  
+  // Bonus Feature State
+  const [freeSpins, setFreeSpins] = useState(0);
+  const [showBonusModal, setShowBonusModal] = useState(false);
+  const [wonFreeSpinsCount, setWonFreeSpinsCount] = useState(0);
   
   // Initialize Reels: 5 columns, each with 3 symbols
   const [reels, setReels] = useState<SlotSymbol[][]>([
@@ -36,14 +41,23 @@ const App: React.FC = () => {
 
   // Handle Spin Logic
   const handleSpin = useCallback(() => {
-    if (balance < currentBet || isSpinning) return;
+    // Allow spin if balance sufficient OR if we have free spins
+    if ((balance < currentBet && freeSpins === 0) || isSpinning) return;
 
     playSpinStart();
-    setBalance(prev => prev - currentBet);
+    
+    // Only deduct balance if NOT a free spin
+    if (freeSpins > 0) {
+      setFreeSpins(prev => prev - 1);
+    } else {
+      setBalance(prev => prev - currentBet);
+    }
+
     setWin(0);
     setWinLines([]);
     setWinningCells({});
     setShowWinModal(false);
+    setShowBonusModal(false);
     setIsSpinning(true);
 
     // Generate new 5x3 grid results
@@ -70,7 +84,7 @@ const App: React.FC = () => {
 
     }, baseSpinDuration);
 
-  }, [balance, currentBet, isSpinning]);
+  }, [balance, currentBet, isSpinning, freeSpins]);
 
   const checkWin = (grid: SlotSymbol[][]) => {
     let totalWin = 0;
@@ -78,6 +92,45 @@ const App: React.FC = () => {
     // Initialize winning cells for 5 columns
     const newWinningCells: {[key: number]: number[]} = { 0: [], 1: [], 2: [], 3: [], 4: [] };
 
+    // --- 1. CHECK SCATTERS (FREE SPINS) ---
+    // Count Stars anywhere on the screen
+    let starCount = 0;
+    const starCells: {c: number, r: number}[] = [];
+    
+    grid.forEach((col, cIdx) => {
+        col.forEach((symbol, rIdx) => {
+            if (symbol.id === SymbolId.STAR) {
+                starCount++;
+                starCells.push({c: cIdx, r: rIdx});
+            }
+        });
+    });
+
+    if (starCount >= 3) {
+        let spinsWon = 0;
+        if (starCount === 3) spinsWon = 5;
+        else if (starCount === 4) spinsWon = 10;
+        else if (starCount >= 5) spinsWon = 20;
+
+        // Mark star cells as winning
+        starCells.forEach(cell => {
+             if (!newWinningCells[cell.c].includes(cell.r)) {
+                newWinningCells[cell.c].push(cell.r);
+            }
+        });
+
+        // Trigger Bonus
+        setFreeSpins(prev => prev + spinsWon);
+        setWonFreeSpinsCount(spinsWon);
+        setShowBonusModal(true);
+        playBonusTrigger();
+        
+        // Scatters also pay out a small cash prize
+        totalWin += currentBet * starCount;
+    }
+
+
+    // --- 2. CHECK PAYLINES ---
     // Define 15 Paylines (5 Columns x 3 Rows)
     const paylines = [
         // 1-3: Straights
@@ -103,11 +156,18 @@ const App: React.FC = () => {
 
     paylines.forEach((line, lineIndex) => {
         const firstSymbol = grid[line[0].c][line[0].r];
+        
+        // Stars (Scatters) generally don't form line wins unless specific,
+        // but here we treat them as normal symbols on lines too if they match
+        // Or we can exclude them from lines. Let's exclude STAR from line matching to keep it purely Scatter.
+        if (firstSymbol.id === SymbolId.STAR) return;
+
         let matchCount = 1;
 
         // Check consecutive matches from left to right
         for (let i = 1; i < 5; i++) {
             const currentSymbol = grid[line[i].c][line[i].r];
+            // Star does not act as wild here.
             if (currentSymbol.id === firstSymbol.id || (firstSymbol.id === SymbolId.SEVEN && currentSymbol.id === SymbolId.SEVEN)) {
                 matchCount++;
             } else {
@@ -126,8 +186,7 @@ const App: React.FC = () => {
             else if (matchCount === 5) lineWin = symbolValue * currentBet * 10;
         }
 
-        // Cherry Bonus (First 2 or just 1?) 
-        // Let's do minor payout for 2 Cherries if no bigger win
+        // Cherry Bonus
         if (matchCount === 2 && firstSymbol.id === SymbolId.CHERRY) {
             lineWin = currentBet * 0.5;
         }
@@ -147,18 +206,47 @@ const App: React.FC = () => {
         }
     });
 
+    setWinningCells(newWinningCells);
+
     if (totalWin > 0) {
       const finalWin = Math.floor(totalWin);
-      const isBigWin = finalWin >= currentBet * 20; // Higher threshold for 5 reels
+      const isBigWin = finalWin >= currentBet * 20; 
       
       setWin(finalWin);
       setWinLines(winningLineIndices);
-      setWinningCells(newWinningCells);
       setBalance(prev => prev + finalWin);
-      playWin(isBigWin);
+      
+      if (!showBonusModal) {
+          playWin(isBigWin);
+          if (isBigWin) {
+            setShowWinModal(true);
+          }
+      }
+    }
+  };
 
-      if (isBigWin) {
-        setShowWinModal(true);
+  const handleShare = async () => {
+    playClick();
+    const shareData = {
+      title: 'Neon Slots 5-Reel',
+      text: 'Play Neon Slots! I just hit a win!',
+      url: window.location.href,
+    };
+
+    if (navigator.share) {
+      try {
+        await navigator.share(shareData);
+      } catch (err) {
+        // Share cancelled
+      }
+    } else {
+      // Fallback for desktop
+      try {
+        await navigator.clipboard.writeText(window.location.href);
+        setShowShareToast(true);
+        setTimeout(() => setShowShareToast(false), 2000);
+      } catch (err) {
+        console.error('Failed to copy', err);
       }
     }
   };
@@ -182,25 +270,37 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center justify-between overflow-hidden font-sans">
+    <div className={`
+        min-h-screen bg-slate-900 text-slate-100 flex flex-col items-center justify-between overflow-hidden font-sans transition-colors duration-1000
+        ${freeSpins > 0 ? 'bg-indigo-950' : 'bg-slate-900'}
+    `}>
       
       {/* Header */}
-      <header className="w-full bg-slate-800 p-3 shadow-lg z-10 border-b border-gold-600/20">
+      <header className={`w-full p-3 shadow-lg z-10 border-b transition-colors duration-1000 ${freeSpins > 0 ? 'bg-indigo-900 border-indigo-500/50' : 'bg-slate-800 border-gold-600/20'}`}>
         <div className="max-w-md mx-auto flex justify-between items-center">
           <div className="flex items-center gap-2">
-             <div className="bg-gold-500 p-1.5 rounded-lg text-slate-900">
+             <div className={`p-1.5 rounded-lg text-slate-900 transition-colors ${freeSpins > 0 ? 'bg-indigo-400' : 'bg-gold-500'}`}>
                <Trophy size={20} fill="currentColor" />
              </div>
-             <h1 className="text-xl font-black italic tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-gold-300 to-gold-600">
-               NEON 5-REEL
+             <h1 className={`text-xl font-black italic tracking-tighter text-transparent bg-clip-text bg-gradient-to-r ${freeSpins > 0 ? 'from-indigo-300 to-purple-400' : 'from-gold-300 to-gold-600'}`}>
+               NEON 5
              </h1>
           </div>
           
-          <div className="flex flex-col items-end">
-             <span className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Credits</span>
-             <div className="flex items-center text-gold-400 gap-1">
-                <CircleDollarSign size={16} />
-                <span className="font-mono text-lg font-bold">{balance.toLocaleString()}</span>
+          <div className="flex items-center gap-3">
+             <button 
+                onClick={handleShare}
+                className="p-2 rounded-full bg-slate-700/50 hover:bg-slate-700 text-gold-400 active:scale-95 transition-all"
+                aria-label="Share Game"
+             >
+                <Share2 size={18} />
+             </button>
+             <div className="flex flex-col items-end">
+                <span className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Credits</span>
+                <div className={`flex items-center gap-1 ${freeSpins > 0 ? 'text-indigo-300' : 'text-gold-400'}`}>
+                    <CircleDollarSign size={16} />
+                    <span className="font-mono text-lg font-bold">{balance.toLocaleString()}</span>
+                </div>
              </div>
           </div>
         </div>
@@ -209,8 +309,16 @@ const App: React.FC = () => {
       {/* Main Game Area */}
       <main className="flex-1 w-full max-w-2xl mx-auto flex flex-col justify-center items-center relative p-2 gap-2">
         
-        {/* Win Display */}
-        <div className="h-14 flex items-center justify-center w-full">
+        {/* Win / Bonus Display */}
+        <div className="h-14 flex items-center justify-center w-full relative">
+            {freeSpins > 0 && !isSpinning && !win && (
+                <div className="animate-pulse flex items-center gap-2 text-indigo-300 bg-indigo-900/50 px-4 py-2 rounded-full border border-indigo-500/50">
+                    <Sparkles size={16} />
+                    <span className="font-bold tracking-widest uppercase text-sm">Free Spins: {freeSpins}</span>
+                    <Sparkles size={16} />
+                </div>
+            )}
+            
             {win > 0 && !isSpinning && (
                 <div className="animate-bounce-win text-center">
                     <div className="text-gold-300 text-xs uppercase tracking-[0.3em] font-bold mb-1">Total Win</div>
@@ -219,23 +327,24 @@ const App: React.FC = () => {
                     </div>
                 </div>
             )}
-            {!win && !isSpinning && (
+
+            {!win && !isSpinning && freeSpins === 0 && (
                  <div className="flex items-center gap-2 text-slate-600 text-xs font-medium tracking-widest uppercase bg-slate-800/50 px-3 py-1 rounded-full">
                     <Info size={12} />
-                    <span>15 Lines Active</span>
+                    <span>3+ 🌟 for Bonus</span>
                  </div>
             )}
         </div>
 
         {/* The Slots Machine Frame - 5x3 Grid */}
-        <div className="w-full bg-slate-800 p-2 rounded-2xl shadow-2xl border-4 border-slate-700 relative">
+        <div className={`w-full p-2 rounded-2xl shadow-2xl border-4 relative transition-colors duration-1000 ${freeSpins > 0 ? 'bg-indigo-900 border-indigo-700' : 'bg-slate-800 border-slate-700'}`}>
             
-            {/* Payline Indicators (Left) - Simplified */}
+            {/* Payline Indicators (Left) */}
             <div className={`absolute -left-1 top-[20%] w-1.5 h-1.5 rounded-full ${winLines.length > 0 ? 'bg-red-500 shadow-[0_0_5px_red]' : 'bg-slate-600'}`}></div>
             <div className={`absolute -left-1 top-[50%] w-1.5 h-1.5 rounded-full ${winLines.length > 0 ? 'bg-red-500 shadow-[0_0_5px_red]' : 'bg-slate-600'}`}></div>
             <div className={`absolute -left-1 top-[80%] w-1.5 h-1.5 rounded-full ${winLines.length > 0 ? 'bg-red-500 shadow-[0_0_5px_red]' : 'bg-slate-600'}`}></div>
 
-            <div className="grid grid-cols-5 gap-1 bg-slate-900 p-1 rounded-lg">
+            <div className={`grid grid-cols-5 gap-1 p-1 rounded-lg transition-colors ${freeSpins > 0 ? 'bg-indigo-950' : 'bg-slate-900'}`}>
                 {[0, 1, 2, 3, 4].map((colIndex) => (
                     <Reel 
                         key={colIndex}
@@ -250,9 +359,6 @@ const App: React.FC = () => {
             {/* Machine Decorative Gloss */}
             <div className="absolute inset-0 rounded-xl ring-1 ring-white/10 pointer-events-none" />
         </div>
-
-        {/* Oracle (Gemini) */}
-        <Oracle balance={balance} lastWin={win} />
       
       </main>
 
@@ -266,8 +372,48 @@ const App: React.FC = () => {
             onDecreaseBet={handleDecreaseBet}
             onIncreaseBet={handleIncreaseBet}
             onMaxBet={handleMaxBet}
-        />
+        >
+             {/* Override button content for Free Spins */}
+             {freeSpins > 0 && (
+                 <div className="flex flex-col items-center justify-center">
+                    <span className="text-sm font-bold tracking-widest">FREE SPIN</span>
+                    <span className="text-xs opacity-70">{freeSpins} Remaining</span>
+                 </div>
+             )}
+        </Controls>
       </footer>
+
+      {/* Share Toast */}
+      {showShareToast && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 bg-slate-800 text-white px-4 py-2 rounded-full shadow-xl border border-gold-500/50 flex items-center gap-2 animate-in fade-in slide-in-from-top-4 z-50">
+           <Check size={16} className="text-green-400" />
+           <span className="text-sm font-bold">Link Copied!</span>
+        </div>
+      )}
+
+      {/* Bonus Trigger Modal */}
+      {showBonusModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-indigo-950/90 backdrop-blur-sm p-4 animate-in fade-in zoom-in duration-300" onClick={() => setShowBonusModal(false)}>
+             <div className="bg-gradient-to-b from-indigo-500 to-purple-600 p-1 rounded-3xl w-full max-w-sm shadow-[0_0_50px_rgba(79,70,229,0.8)] animate-pulse-glow">
+                <div className="bg-slate-900 rounded-[22px] p-8 text-center flex flex-col items-center gap-4 border-4 border-indigo-400/50">
+                    <h2 className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-b from-white to-indigo-200 uppercase tracking-tighter">
+                        Bonus Triggered!
+                    </h2>
+                    <div className="text-6xl my-4 animate-bounce">🌟</div>
+                    <div className="text-5xl font-mono font-bold text-white drop-shadow-md">
+                        {wonFreeSpinsCount}
+                    </div>
+                    <p className="text-indigo-200 text-sm uppercase tracking-widest font-bold">Free Spins Awarded</p>
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); setShowBonusModal(false); }}
+                        className="mt-4 px-8 py-3 bg-indigo-500 hover:bg-indigo-400 text-white font-bold rounded-full uppercase tracking-wider shadow-lg transition-colors"
+                    >
+                        Start Feature
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
 
       {/* Big Win Modal Overlay */}
       {showWinModal && (

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { ReactNode } from 'react';
 import { Plus, Minus, Zap } from 'lucide-react';
 import { playClick } from '../services/audioService';
 
@@ -10,6 +10,7 @@ interface ControlsProps {
   onIncreaseBet: () => void;
   onDecreaseBet: () => void;
   onMaxBet: () => void;
+  children?: ReactNode;
 }
 
 const Controls: React.FC<ControlsProps> = ({
@@ -19,13 +20,17 @@ const Controls: React.FC<ControlsProps> = ({
   onSpin,
   onIncreaseBet,
   onDecreaseBet,
-  onMaxBet
+  onMaxBet,
+  children
 }) => {
   
   const handleAction = (action: () => void) => {
     playClick();
     action();
   };
+
+  // Enable spin if not already spinning AND (we have enough balance OR we are in free spin mode (children provided))
+  const canSpin = !isSpinning && (balance >= currentBet || !!children);
 
   return (
     <div className="flex flex-col gap-4 w-full max-w-md mx-auto p-4 bg-slate-900/90 rounded-t-3xl border-t border-gold-500/30 backdrop-blur-md shadow-2xl">
@@ -65,16 +70,16 @@ const Controls: React.FC<ControlsProps> = ({
       {/* Main Spin Button */}
       <button
         onClick={onSpin}
-        disabled={isSpinning || balance < currentBet}
+        disabled={!canSpin}
         className={`
             relative w-full py-6 rounded-2xl font-black text-3xl tracking-widest uppercase
             transition-all duration-100 transform
             ${isSpinning ? 'bg-slate-700 text-slate-500 cursor-not-allowed scale-95' : 'bg-gradient-to-b from-gold-400 to-gold-600 text-slate-900 shadow-lg shadow-gold-500/20 active:scale-95 active:shadow-none'}
-            ${balance < currentBet ? 'opacity-50 grayscale' : ''}
+            ${!canSpin && !isSpinning ? 'opacity-50 grayscale' : ''}
         `}
       >
-        {isSpinning ? 'Spinning...' : 'SPIN'}
-        {!isSpinning && <Zap className="absolute top-1/2 right-6 -translate-y-1/2 text-white/40" size={32} fill="currentColor" />}
+        {isSpinning ? 'Spinning...' : (children || 'SPIN')}
+        {!isSpinning && !children && <Zap className="absolute top-1/2 right-6 -translate-y-1/2 text-white/40" size={32} fill="currentColor" />}
       </button>
 
       {/* Balance Display Small */}

@@ -75,6 +75,35 @@ export const playReelStop = () => {
   } catch (e) {}
 };
 
+export const playBonusTrigger = () => {
+  try {
+    const ctx = initAudio();
+    
+    const playChime = (freq: number, time: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, time);
+      gain.gain.setValueAtTime(0, time);
+      gain.gain.linearRampToValueAtTime(0.2, time + 0.1);
+      gain.gain.exponentialRampToValueAtTime(0.001, time + 0.8);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(time);
+      osc.stop(time + 0.8);
+    };
+
+    const now = ctx.currentTime;
+    // Magical upward spiral
+    playChime(523.25, now);       // C5
+    playChime(659.25, now + 0.1); // E5
+    playChime(783.99, now + 0.2); // G5
+    playChime(1046.50, now + 0.3); // C6
+    playChime(1318.51, now + 0.4); // E6
+    playChime(1567.98, now + 0.5); // G6
+  } catch (e) {}
+};
+
 export const playWin = (isBigWin: boolean) => {
   try {
     const ctx = initAudio();

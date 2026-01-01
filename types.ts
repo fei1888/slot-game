@@ -4,7 +4,8 @@ export enum SymbolId {
   GRAPE = 'GRAPE',
   BELL = 'BELL',
   DIAMOND = 'DIAMOND',
-  SEVEN = 'SEVEN'
+  SEVEN = 'SEVEN',
+  STAR = 'STAR'
 }
 
 export interface SlotSymbol {

@@ -7,6 +7,7 @@ export const SYMBOLS: SlotSymbol[] = [
   { id: SymbolId.BELL, icon: '🔔', value: 10, weight: 15 },
   { id: SymbolId.DIAMOND, icon: '💎', value: 25, weight: 8 },
   { id: SymbolId.SEVEN, icon: '7️⃣', value: 50, weight: 5 },
+  { id: SymbolId.STAR, icon: '🌟', value: 100, weight: 4 }, // Scatter Symbol
 ];
 
 export const INITIAL_BALANCE = 1000;
